@@ -1,14 +1,23 @@
 import os
 import sys
-import clip
 import torch
 from tqdm import tqdm
 from losses import fusion_prompt_loss
 from torchvision import transforms
 
-def train_one_epoch(model, model_clip, optimizer, lr_scheduler, data_loader, device, epoch):
+def tokenize_text_batch(tokenizer, texts, device, max_length=512):
+    encoded = tokenizer(
+        list(texts),
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt"
+    )
+    return {key: value.to(device) for key, value in encoded.items()}
+
+
+def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch):
     model.train()
-    model_clip.eval()
     loss_function_prompt = fusion_prompt_loss()
     loss_function_prompt = loss_function_prompt.to(device)
 
@@ -25,8 +34,8 @@ def train_one_epoch(model, model_clip, optimizer, lr_scheduler, data_loader, dev
     data_loader = tqdm(data_loader, file=sys.stdout)
     for  image_ir, vis_text, ir_text, image_vis_mask,image_ir_mask,vis_y_image, vis_cb_image, vis_cr_image in data_loader:
 
-        image_vis_text = clip.tokenize(vis_text).to(device)
-        image_ir_text = clip.tokenize(ir_text).to(device)
+        image_vis_text = tokenize_text_batch(tokenizer, vis_text, device)
+        image_ir_text = tokenize_text_batch(tokenizer, ir_text, device)
 
         vis_y_image = vis_y_image.to(device)
         image_ir = image_ir.to(device)
@@ -67,10 +76,9 @@ def train_one_epoch(model, model_clip, optimizer, lr_scheduler, data_loader, dev
 
 
 @torch.no_grad()
-def evaluate(model, model_clip, data_loader, device, epoch, lr, filefold_path):
+def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path):
     loss_function_prompt = fusion_prompt_loss()
     model.eval()
-    model_clip.eval()
 
     accu_total_loss = torch.zeros(1).to(device)
     accu_ssim_loss = torch.zeros(1).to(device)
@@ -93,8 +101,8 @@ def evaluate(model, model_clip, data_loader, device, epoch, lr, filefold_path):
 
     for image_ir, vis_text, ir_text, image_vis_mask, image_ir_mask, name,vis_y_image, vis_cb_image, vis_cr_image in data_loader:
 
-        image_vis_text = clip.tokenize(vis_text).to(device)
-        image_ir_text = clip.tokenize(ir_text).to(device)
+        image_vis_text = tokenize_text_batch(tokenizer, vis_text, device)
+        image_ir_text = tokenize_text_batch(tokenizer, ir_text, device)
         
         
         vis_y_image = vis_y_image.to(device)
