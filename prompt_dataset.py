@@ -31,6 +31,23 @@ def load_mask_or_default(mask_path, reference_image):
     return torch.ones((1, reference_image.height, reference_image.width), dtype=torch.float32)
 
 
+def load_aligned_t1_t2_images(t1_path, t2_path, resize_to=None):
+    t1_image = Image.open(t1_path).convert(mode="RGB")
+    t2_image = Image.open(t2_path).convert("L")
+
+    if resize_to is None:
+        target_size = t1_image.size
+    else:
+        target_size = resize_to
+
+    if t1_image.size != target_size:
+        t1_image = t1_image.resize(target_size, resample=Image.BICUBIC)
+    if t2_image.size != target_size:
+        t2_image = t2_image.resize(target_size, resample=Image.BICUBIC)
+
+    return t1_image, t2_image
+
+
 to_tensor = transforms.Compose([transforms.ToTensor()])
 
 
@@ -65,8 +82,7 @@ class PromptDataSet(Dataset):
             t1_mask_path = self.filepath_t1_mask[index] if index < len(self.filepath_t1_mask) else None
             t2_mask_path = self.filepath_t2_mask[index] if index < len(self.filepath_t2_mask) else None
 
-            t1_image = Image.open(t1_path).convert(mode="RGB")
-            t2_image = Image.open(t2_path).convert("L")
+            t1_image, t2_image = load_aligned_t1_t2_images(t1_path, t2_path)
             image_t1 = self.transform(t1_image)
             image_t2 = self.transform(t2_image)
             image_t1_mask = load_mask_or_default(t1_mask_path, t1_image)
@@ -88,8 +104,7 @@ class PromptDataSet(Dataset):
             t2_mask_path = self.filepath_t2_mask[index] if index < len(self.filepath_t2_mask) else None
             name = self.filenames_t1[index]
 
-            t1_image = Image.open(t1_path).convert(mode="RGB")
-            t2_image = Image.open(t2_path).convert("L")
+            t1_image, t2_image = load_aligned_t1_t2_images(t1_path, t2_path)
             image_t1 = self.transform(t1_image)
             image_t2 = self.transform(t2_image)
             image_t1_mask = load_mask_or_default(t1_mask_path, t1_image)
@@ -107,28 +122,29 @@ class PromptDataSet(Dataset):
             ultrasound_text_path = self.filepath_ultrasound_text[index]
             name = self.filenames_t1[index]
 
-            width = Image.open(t1_path).width
-            height = Image.open(t1_path).height
+            t1_image = Image.open(t1_path).convert(mode="RGB")
+            t2_image = Image.open(t2_path).convert("L")
+            width = t1_image.width
+            height = t1_image.height
             pathology_text = open(pathology_text_path).readline()
             ultrasound_text = open(ultrasound_text_path).readline()
             target_text = pathology_text
 
             new_width = int(round(width // 8) * 8)
             new_height = int(round(height // 8) * 8)
+            target_size = (new_width, new_height)
 
             if new_width == width and new_height == height:
                 flag = 0
-                image_t1 = self.transform(Image.open(t1_path).convert(mode="RGB"))
-                image_t2 = self.transform(Image.open(t2_path).convert("L"))
+                aligned_t1, aligned_t2 = load_aligned_t1_t2_images(t1_path, t2_path, resize_to=t1_image.size)
+                image_t1 = self.transform(aligned_t1)
+                image_t2 = self.transform(aligned_t2)
                 t1_y_image, t1_cb_image, t1_cr_image = RGB2YCrCb(image_t1)
             else:
                 flag = 1
-                image_t1 = self.transform(
-                    Image.open(t1_path).convert(mode="RGB").resize((new_width, new_height), resample=Image.BICUBIC)
-                )
-                image_t2 = self.transform(
-                    Image.open(t2_path).convert("L").resize((new_width, new_height), resample=Image.BICUBIC)
-                )
+                aligned_t1, aligned_t2 = load_aligned_t1_t2_images(t1_path, t2_path, resize_to=target_size)
+                image_t1 = self.transform(aligned_t1)
+                image_t2 = self.transform(aligned_t2)
                 t1_y_image, t1_cb_image, t1_cr_image = RGB2YCrCb(image_t1)
 
             return image_t2, pathology_text, ultrasound_text, name, t1_y_image, t1_cb_image, t1_cr_image, height, width, flag, target_text
