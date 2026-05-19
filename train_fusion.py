@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
@@ -135,6 +136,7 @@ def main(args):
         args.text_model_name,
         device,
         explicit_path=args.text_model_path,
+        load_on_cpu=args.text_encoder_on_cpu,
     )
     if is_main_process():
         print("Using text encoder source: {}".format(text_model_source))
@@ -158,6 +160,8 @@ def main(args):
     pg = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(pg, lr=args.lr, weight_decay=5E-2)
     lr_scheduler = create_lr_scheduler(optimizer, len(train_loader), args.epochs, warmup=True)
+    use_amp = device.type == "cuda"
+    scaler = GradScaler(enabled=use_amp)
 
     if args.resume:
         checkpoint = torch.load(args.resume, map_location=device)
@@ -183,6 +187,8 @@ def main(args):
                 epoch=epoch,
                 is_main_process=is_main_process(),
                 world_size=world_size,
+                scaler=scaler,
+                use_amp=use_amp,
             )
 
         if is_main_process():
@@ -256,6 +262,7 @@ if __name__ == '__main__':
     parser.add_argument('--dist-backend', default='nccl', help='distributed backend')
     parser.add_argument('--text-model-name', default='bert-base-uncased', help='huggingface text encoder name')
     parser.add_argument('--text-model-path', default='./bert-base-uncased', help='local path to a downloaded Hugging Face text encoder')
+    parser.add_argument('--text-encoder-on-cpu', action='store_true', default=True, help='keep the frozen text encoder on CPU to save GPU memory')
     opt = parser.parse_args()
 
     main(opt)
