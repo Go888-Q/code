@@ -248,6 +248,11 @@ class Fusion_Embed(nn.Module):
         self.fusion_proj = nn.Conv2d(embed_dim * 2, embed_dim, kernel_size=1, stride=1, bias=bias)
 
     def forward(self, x_A, x_B):
+        if x_A.shape[0] != x_B.shape[0] or x_A.shape[2] != x_B.shape[2] or x_A.shape[3] != x_B.shape[3]:
+            raise RuntimeError(
+                "Fusion_Embed shape mismatch: "
+                f"x_A={tuple(x_A.shape)}, x_B={tuple(x_B.shape)}"
+            )
         x = torch.concat([x_A, x_B], dim=1)
         x = self.fusion_proj(x)
         return x
