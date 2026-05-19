@@ -44,12 +44,12 @@ class TextFuse(nn.Module):
         self.output = nn.Conv2d(int(dim), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
     def forward(self, vi, ir, vis_text, ir_text, vis_target_text=None):
-        vis_text_features = self.get_text_feature(vis_text).to(vi.dtype)
-        ir_text_features = self.get_text_feature(ir_text).to(vi.dtype)
+        vis_text_features = self.get_text_feature(vis_text).to(device=vi.device, dtype=vi.dtype)
+        ir_text_features = self.get_text_feature(ir_text).to(device=vi.device, dtype=vi.dtype)
         if vis_target_text is None:
             vis_target_text_features = 0.5 * (vis_text_features + ir_text_features)
         else:
-            vis_target_text_features = self.get_text_feature(vis_target_text).to(vi.dtype)
+            vis_target_text_features = self.get_text_feature(vis_target_text).to(device=vi.device, dtype=vi.dtype)
 
         vi = self.encoder_vi(vi)
         ir = self.encoder_ir(ir)
@@ -77,7 +77,9 @@ class TextFuse(nn.Module):
 
     @torch.no_grad()
     def get_text_feature(self, text):
+        text_encoder_device = next(self.model_clip.parameters()).device
         if isinstance(text, dict):
+            text = {key: value.to(text_encoder_device) for key, value in text.items()}
             outputs = self.model_clip(**text)
             if hasattr(outputs, "last_hidden_state"):
                 hidden = outputs.last_hidden_state
