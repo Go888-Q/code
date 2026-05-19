@@ -1,25 +1,25 @@
-
 from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 from PIL import Image
 import glob
 import os
 import torch
+
 from utils import RGB2YCrCb
 
+
 DATASET_ROOT = "/data/wangjiaqi/fusion"
-VIS_IMAGE_DIR = os.path.join(DATASET_ROOT, "MRI-T1")
-IR_IMAGE_DIR = os.path.join(DATASET_ROOT, "MRI-T2")
-VIS_TEXT_DIR = os.path.join(DATASET_ROOT, "Pathology_Orders")
-IR_TEXT_DIR = os.path.join(DATASET_ROOT, "Ultrasound_Orders")
+MRI_T1_IMAGE_DIR = os.path.join(DATASET_ROOT, "MRI-T1")
+MRI_T2_IMAGE_DIR = os.path.join(DATASET_ROOT, "MRI-T2")
+PATHOLOGY_TEXT_DIR = os.path.join(DATASET_ROOT, "Pathology_Orders")
+ULTRASOUND_TEXT_DIR = os.path.join(DATASET_ROOT, "Ultrasound_Orders")
 
 
 def prepare_data_path(dataset_path):
     filenames = os.listdir(dataset_path)
-    data_dir = dataset_path
-    data = glob.glob(os.path.join(data_dir, "*.jpg"))
-    data.extend(glob.glob(os.path.join(data_dir, "*.png")))
-    data.extend(glob.glob(os.path.join(data_dir, "*.txt")))
+    data = glob.glob(os.path.join(dataset_path, "*.jpg"))
+    data.extend(glob.glob(os.path.join(dataset_path, "*.png")))
+    data.extend(glob.glob(os.path.join(dataset_path, "*.txt")))
     data.sort()
     filenames.sort()
     return data, filenames
@@ -33,138 +33,105 @@ def load_mask_or_default(mask_path, reference_image):
 
 to_tensor = transforms.Compose([transforms.ToTensor()])
 
+
 class PromptDataSet(Dataset):
     def __init__(self, split):
         super(PromptDataSet, self).__init__()
-        assert split in ['train', 'eval', 'test'], 'split must be "train"|"eval"|"test"'
+        assert split in ["train", "eval", "test"], 'split must be "train"|"eval"|"test"'
         self.transform = to_tensor
-        self.filepath_vis_mask = []
-        self.filepath_ir_mask = []
+        self.filepath_t1_mask = []
+        self.filepath_t2_mask = []
+        self.split = split
 
-        if split == 'train':
-            data_dir_vis = VIS_IMAGE_DIR
-            data_dir_ir = IR_IMAGE_DIR
-            data_dir_vis_text = VIS_TEXT_DIR
-            data_dir_ir_text = IR_TEXT_DIR
+        self.filepath_t1, self.filenames_t1 = prepare_data_path(MRI_T1_IMAGE_DIR)
+        self.filepath_t2, self.filenames_t2 = prepare_data_path(MRI_T2_IMAGE_DIR)
+        self.filepath_pathology_text, self.filenames_pathology_text = prepare_data_path(PATHOLOGY_TEXT_DIR)
+        self.filepath_ultrasound_text, self.filenames_ultrasound_text = prepare_data_path(ULTRASOUND_TEXT_DIR)
 
-            self.filepath_vis, self.filenames_vis = prepare_data_path(data_dir_vis)
-            self.filepath_ir, self.filenames_ir = prepare_data_path(data_dir_ir)
-            self.filepath_vis_text, self.filenames_vis_text = prepare_data_path(data_dir_vis_text)
-            self.filepath_ir_text, self.filenames_ir_text = prepare_data_path(data_dir_ir_text)
-
-            self.split = split
-            self.length = min(len(self.filenames_vis), len(self.filenames_ir),
-                              len(self.filenames_vis_text), len(self.filenames_ir_text))
-
-        elif split == 'eval':
-            data_dir_vis = VIS_IMAGE_DIR
-            data_dir_ir = IR_IMAGE_DIR
-            data_dir_vis_text = VIS_TEXT_DIR
-            data_dir_ir_text = IR_TEXT_DIR
-
-            self.filepath_vis, self.filenames_vis = prepare_data_path(data_dir_vis)
-            self.filepath_ir, self.filenames_ir = prepare_data_path(data_dir_ir)
-            self.filepath_vis_text, self.filenames_vis_text = prepare_data_path(data_dir_vis_text)
-            self.filepath_ir_text, self.filenames_ir_text = prepare_data_path(data_dir_ir_text)
-
-            self.split = split
-            self.length = min(len(self.filenames_vis), len(self.filenames_ir),
-                              len(self.filenames_vis_text), len(self.filenames_ir_text))
-
-        elif split == 'test':
-            data_dir_vis = VIS_IMAGE_DIR
-            data_dir_ir = IR_IMAGE_DIR
-            data_dir_vis_text = VIS_TEXT_DIR
-            data_dir_ir_text = IR_TEXT_DIR
-            self.filepath_vis, self.filenames_vis = prepare_data_path(data_dir_vis)
-            self.filepath_ir, self.filenames_ir = prepare_data_path(data_dir_ir)
-            self.filepath_vis_text, self.filenames_vis_text = prepare_data_path(data_dir_vis_text)
-            self.filepath_ir_text, self.filenames_ir_text = prepare_data_path(data_dir_ir_text)
-
-            self.split = split
-            self.length = min(len(self.filenames_vis), len(self.filenames_ir),
-                              len(self.filenames_vis_text), len(self.filenames_ir_text))
+        self.length = min(
+            len(self.filenames_t1),
+            len(self.filenames_t2),
+            len(self.filenames_pathology_text),
+            len(self.filenames_ultrasound_text),
+        )
 
     def __getitem__(self, index):
-        if self.split=='train':
-            vis_path        = self.filepath_vis[index]
-            ir_path         = self.filepath_ir[index]
-            
-            vis_path_text = self.filepath_vis_text[index]
-            ir_path_text = self.filepath_ir_text[index]
-            
-            vis_path_mask = self.filepath_vis_mask[index] if index < len(self.filepath_vis_mask) else None
-            ir_path_mask = self.filepath_ir_mask[index] if index < len(self.filepath_ir_mask) else None
+        if self.split == "train":
+            t1_path = self.filepath_t1[index]
+            t2_path = self.filepath_t2[index]
+            pathology_text_path = self.filepath_pathology_text[index]
+            ultrasound_text_path = self.filepath_ultrasound_text[index]
 
-            vis_image = Image.open(vis_path).convert(mode='RGB')
-            ir_image = Image.open(ir_path).convert('L')
-            image_vis = self.transform(vis_image)
-            image_ir = self.transform(ir_image)
-            image_vis_mask = load_mask_or_default(vis_path_mask, vis_image)
-            image_ir_mask = load_mask_or_default(ir_path_mask, ir_image)
-            vis_text = open(vis_path_text).readline()
-            ir_text = open(ir_path_text).readline()
+            t1_mask_path = self.filepath_t1_mask[index] if index < len(self.filepath_t1_mask) else None
+            t2_mask_path = self.filepath_t2_mask[index] if index < len(self.filepath_t2_mask) else None
 
-            vis_y_image, vis_cb_image, vis_cr_image = RGB2YCrCb(image_vis)
+            t1_image = Image.open(t1_path).convert(mode="RGB")
+            t2_image = Image.open(t2_path).convert("L")
+            image_t1 = self.transform(t1_image)
+            image_t2 = self.transform(t2_image)
+            image_t1_mask = load_mask_or_default(t1_mask_path, t1_image)
+            image_t2_mask = load_mask_or_default(t2_mask_path, t2_image)
+            pathology_text = open(pathology_text_path).readline()
+            ultrasound_text = open(ultrasound_text_path).readline()
 
+            t1_y_image, t1_cb_image, t1_cr_image = RGB2YCrCb(image_t1)
 
-            return image_ir, vis_text, ir_text, image_vis_mask, image_ir_mask ,vis_y_image, vis_cb_image, vis_cr_image
+            return image_t2, pathology_text, ultrasound_text, image_t1_mask, image_t2_mask, t1_y_image, t1_cb_image, t1_cr_image
 
-        elif self.split == 'eval':
-            vis_path        = self.filepath_vis[index]
-            ir_path         = self.filepath_ir[index]
-            vis_path_text = self.filepath_vis_text[index]
-            ir_path_text = self.filepath_ir_text[index]
-            vis_path_mask = self.filepath_vis_mask[index] if index < len(self.filepath_vis_mask) else None
-            ir_path_mask = self.filepath_ir_mask[index] if index < len(self.filepath_ir_mask) else None
-            name = self.filenames_vis[index]
+        elif self.split == "eval":
+            t1_path = self.filepath_t1[index]
+            t2_path = self.filepath_t2[index]
+            pathology_text_path = self.filepath_pathology_text[index]
+            ultrasound_text_path = self.filepath_ultrasound_text[index]
 
-            vis_image = Image.open(vis_path).convert(mode='RGB')
-            ir_image = Image.open(ir_path).convert('L')
-            image_vis = self.transform(vis_image)
-            image_ir = self.transform(ir_image)
-            image_vis_mask = load_mask_or_default(vis_path_mask, vis_image)
-            image_ir_mask = load_mask_or_default(ir_path_mask, ir_image)
-            
-            vis_text = open(vis_path_text).readline()
-            ir_text = open(ir_path_text).readline()
-                             
-            vis_y_image, vis_cb_image, vis_cr_image = RGB2YCrCb(image_vis)
-            return  image_ir, vis_text, ir_text, image_vis_mask, image_ir_mask, name ,vis_y_image, vis_cb_image, vis_cr_image
+            t1_mask_path = self.filepath_t1_mask[index] if index < len(self.filepath_t1_mask) else None
+            t2_mask_path = self.filepath_t2_mask[index] if index < len(self.filepath_t2_mask) else None
+            name = self.filenames_t1[index]
 
+            t1_image = Image.open(t1_path).convert(mode="RGB")
+            t2_image = Image.open(t2_path).convert("L")
+            image_t1 = self.transform(t1_image)
+            image_t2 = self.transform(t2_image)
+            image_t1_mask = load_mask_or_default(t1_mask_path, t1_image)
+            image_t2_mask = load_mask_or_default(t2_mask_path, t2_image)
+            pathology_text = open(pathology_text_path).readline()
+            ultrasound_text = open(ultrasound_text_path).readline()
 
-        elif self.split=='test':
-            vis_path = self.filepath_vis[index]
-            ir_path = self.filepath_ir[index]
-            vis_path_text = self.filepath_vis_text[index]
-            ir_path_text = self.filepath_ir_text[index]
-            name = self.filenames_vis[index]
-            w = Image.open(vis_path).width  # 鍥剧墖鐨勫
-            h = Image.open(vis_path).height  # 鍥剧墖鐨勯珮
-            vis_text = open(vis_path_text).readline()
-            ir_text = open(ir_path_text).readline()
-            vis_target_text = vis_text
+            t1_y_image, t1_cb_image, t1_cr_image = RGB2YCrCb(image_t1)
+            return image_t2, pathology_text, ultrasound_text, image_t1_mask, image_t2_mask, name, t1_y_image, t1_cb_image, t1_cr_image
 
-            new_w = int(round(w // 8) * 8)
-            new_h = int(round(h // 8) * 8)
+        elif self.split == "test":
+            t1_path = self.filepath_t1[index]
+            t2_path = self.filepath_t2[index]
+            pathology_text_path = self.filepath_pathology_text[index]
+            ultrasound_text_path = self.filepath_ultrasound_text[index]
+            name = self.filenames_t1[index]
 
-            if new_w == w and new_h == h:
+            width = Image.open(t1_path).width
+            height = Image.open(t1_path).height
+            pathology_text = open(pathology_text_path).readline()
+            ultrasound_text = open(ultrasound_text_path).readline()
+            target_text = pathology_text
+
+            new_width = int(round(width // 8) * 8)
+            new_height = int(round(height // 8) * 8)
+
+            if new_width == width and new_height == height:
                 flag = 0
-                image_vis = self.transform(Image.open(vis_path).convert(mode='RGB'))
-                image_ir = self.transform(Image.open(ir_path).convert('L'))
-                vis_y_image, vis_cb_image, vis_cr_image = RGB2YCrCb(image_vis)
-
+                image_t1 = self.transform(Image.open(t1_path).convert(mode="RGB"))
+                image_t2 = self.transform(Image.open(t2_path).convert("L"))
+                t1_y_image, t1_cb_image, t1_cr_image = RGB2YCrCb(image_t1)
             else:
                 flag = 1
-                image_vis = self.transform(Image.open(vis_path).convert(mode='RGB').resize((new_w, new_h), resample=Image.BICUBIC))
-                image_ir = self.transform(Image.open(ir_path).convert('L').resize((new_w, new_h), resample=Image.BICUBIC))
-                vis_y_image, vis_cb_image, vis_cr_image = RGB2YCrCb(image_vis)
+                image_t1 = self.transform(
+                    Image.open(t1_path).convert(mode="RGB").resize((new_width, new_height), resample=Image.BICUBIC)
+                )
+                image_t2 = self.transform(
+                    Image.open(t2_path).convert("L").resize((new_width, new_height), resample=Image.BICUBIC)
+                )
+                t1_y_image, t1_cb_image, t1_cr_image = RGB2YCrCb(image_t1)
 
-            return  image_ir, vis_text, ir_text,  name ,vis_y_image, vis_cb_image, vis_cr_image ,h ,w,flag, vis_target_text
+            return image_t2, pathology_text, ultrasound_text, name, t1_y_image, t1_cb_image, t1_cr_image, height, width, flag, target_text
 
     def __len__(self):
         return self.length
-
-    
-    
-
