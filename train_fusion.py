@@ -160,7 +160,7 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='cuda', help='device (i.e. cuda or cpu)')
     parser.add_argument('--gpu_id', default='0', help='device id (i.e. 0, 1, 2 or 3)')
     parser.add_argument('--text-model-name', default='bert-base-uncased', help='huggingface text encoder name')
-    parser.add_argument('--text-model-path', default='', help='local path to a downloaded Hugging Face text encoder')
+    parser.add_argument('--text-model-path', default='./bert-base-uncased', help='local path to a downloaded Hugging Face text encoder')
     opt = parser.parse_args()
 
     main(opt)
