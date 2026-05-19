@@ -78,7 +78,7 @@ def clamp(value, min=0.0, max=1.0):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--text-model-name", default="bert-base-uncased", help="huggingface text encoder name")
-    parser.add_argument("--text-model-path", default="", help="local path to a downloaded Hugging Face text encoder")
+    parser.add_argument("--text-model-path", default="./bert-base-uncased", help="local path to a downloaded Hugging Face text encoder")
     parser.add_argument("--checkpoint-path", default="./checkpoint/checkpoint.pth", help="checkpoint path")
     args = parser.parse_args()
 
