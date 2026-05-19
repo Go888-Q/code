@@ -20,26 +20,19 @@ def evaluate(model, tokenizer, data_loader, device):
     data_loader = tqdm(data_loader, file=sys.stdout)
     model_to_run = model.module if hasattr(model, "module") else model
 
-    for batch in data_loader:
-        if len(batch) == 11:
-            image_ir, vis_text, ir_text, name, vis_y_image, vis_cb_image, vis_cr_image, h, w, flag, vis_target_text = batch
-            vis_target_text = tokenize_text_batch(tokenizer, vis_target_text, device)
-        else:
-            image_ir, vis_text, ir_text, name, vis_y_image, vis_cb_image, vis_cr_image, h, w, flag = batch
-            vis_target_text = None
+    for image_t2, pathology_text, ultrasound_text, name, t1_y_image, t1_cb_image, t1_cr_image, h, w, flag in data_loader:
+        pathology_tokens = tokenize_text_batch(tokenizer, pathology_text, device)
+        ultrasound_tokens = tokenize_text_batch(tokenizer, ultrasound_text, device)
 
-        vis_text = tokenize_text_batch(tokenizer, vis_text, device)
-        ir_text = tokenize_text_batch(tokenizer, ir_text, device)
+        t1_y_image = t1_y_image.to(device)
+        image_t2 = image_t2.to(device)
+        t1_cb_image = t1_cb_image.to(device)
+        t1_cr_image = t1_cr_image.to(device)
 
-        vis_y_image = vis_y_image.to(device)
-        image_ir = image_ir.to(device)
-        vis_cb_image = vis_cb_image.to(device)
-        vis_cr_image = vis_cr_image.to(device)
-
-        fused = model_to_run(vis_y_image, image_ir, vis_text, ir_text, vis_target_text)
+        fused = model_to_run(t1_y_image, image_t2, pathology_tokens, ultrasound_tokens)
 
         fused_img = clamp(fused)
-        fused_img_tensor = YCrCb2RGB(fused_img[0], vis_cb_image[0], vis_cr_image[0])
+        fused_img_tensor = YCrCb2RGB(fused_img[0], t1_cb_image[0], t1_cr_image[0])
         fused_img = transforms.ToPILImage()(fused_img_tensor)
 
         resize_flag = flag.item() if isinstance(flag, torch.Tensor) else flag
