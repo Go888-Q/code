@@ -6,6 +6,7 @@ from tqdm import tqdm
 from losses import fusion_prompt_loss
 from torchvision import transforms
 from transformers import AutoModel, AutoTokenizer
+from torch.cuda.amp import autocast
 
 def tokenize_text_batch(tokenizer, texts, device, max_length=512):
     encoded = tokenizer(
@@ -39,12 +40,13 @@ def resolve_text_model_source(model_name_or_path, explicit_path=""):
     return model_name_or_path, False
 
 
-def load_text_encoder(model_name_or_path, device, explicit_path=""):
+def load_text_encoder(model_name_or_path, device, explicit_path="", load_on_cpu=False):
     source, is_local = resolve_text_model_source(model_name_or_path, explicit_path=explicit_path)
+    model_device = torch.device("cpu") if load_on_cpu else device
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=is_local)
-        model = AutoModel.from_pretrained(source, local_files_only=is_local).to(device)
+        model = AutoModel.from_pretrained(source, local_files_only=is_local).to(model_device)
         return tokenizer, model, source
     except OSError as exc:
         hint = (
@@ -66,7 +68,7 @@ def reduce_tensor(value, world_size):
     return reduced
 
 
-def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch, is_main_process=True, world_size=1):
+def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch, is_main_process=True, world_size=1, scaler=None, use_amp=False):
     model.train()
     loss_function_prompt = fusion_prompt_loss()
     loss_function_prompt = loss_function_prompt.to(device)
@@ -92,12 +94,16 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
         image_vis_mask = image_vis_mask.to(device)
         image_ir_mask = image_ir_mask.to(device)
 
-        I_fused = model(vis_y_image, image_ir, image_vis_text, image_ir_text)
+        with autocast(enabled=use_amp):
+            I_fused = model(vis_y_image, image_ir, image_vis_text, image_ir_text)
 
-        loss, loss_ssim, loss_ssim_mask, loss_consist, loss_consist_mask, loss_text, loss_text_mask = \
-            loss_function_prompt(vis_y_image, image_ir, I_fused, image_vis_mask, image_ir_mask)
+            loss, loss_ssim, loss_ssim_mask, loss_consist, loss_consist_mask, loss_text, loss_text_mask = \
+                loss_function_prompt(vis_y_image, image_ir, I_fused, image_vis_mask, image_ir_mask)
 
-        loss.backward()
+        if scaler is not None and use_amp:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
 
         accu_total_loss += loss.detach()
         accu_ssim_loss += loss_ssim.detach()
@@ -119,7 +125,11 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
             print('WARNING: non-finite loss, ending training ', loss)
             sys.exit(1)
 
-        optimizer.step()
+        if scaler is not None and use_amp:
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            optimizer.step()
         lr_scheduler.step()
         optimizer.zero_grad()
 
@@ -171,10 +181,9 @@ def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path, is
         vis_cb_image = vis_cb_image.to(device)
         vis_cr_image = vis_cr_image.to(device)
 
-        I_fused = model(vis_y_image, image_ir, image_vis_text, image_ir_text)
-
-
-        fused_img = clamp(I_fused)
+        with autocast(enabled=(device.type == "cuda")):
+            I_fused = model(vis_y_image, image_ir, image_vis_text, image_ir_text)
+            fused_img = clamp(I_fused)
         
         fused_img = YCrCb2RGB(fused_img[0], vis_cb_image[0], vis_cr_image[0])
         fused_img = transforms.ToPILImage()(fused_img)
@@ -184,8 +193,9 @@ def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path, is
         
 
 
-        loss, loss_ssim, loss_ssim_mask, loss_consist, loss_consist_mask, loss_text, loss_text_mask = \
-            loss_function_prompt(vis_y_image, image_ir, I_fused, image_vis_mask, image_ir_mask)
+        with autocast(enabled=(device.type == "cuda")):
+            loss, loss_ssim, loss_ssim_mask, loss_consist, loss_consist_mask, loss_text, loss_text_mask = \
+                loss_function_prompt(vis_y_image, image_ir, I_fused, image_vis_mask, image_ir_mask)
 
 
 
