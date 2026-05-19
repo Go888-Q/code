@@ -1,12 +1,15 @@
 import os
 import sys
+
 import torch
 import torch.distributed as dist
-from tqdm import tqdm
-from losses import fusion_prompt_loss
-from torchvision import transforms
-from transformers import AutoModel, AutoTokenizer
 from torch.cuda.amp import autocast
+from torchvision import transforms
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
+
+from losses import fusion_prompt_loss
+
 
 def tokenize_text_batch(tokenizer, texts, device, max_length=512):
     encoded = tokenizer(
@@ -14,7 +17,7 @@ def tokenize_text_batch(tokenizer, texts, device, max_length=512):
         padding=True,
         truncation=True,
         max_length=max_length,
-        return_tensors="pt"
+        return_tensors="pt",
     )
     return {key: value.to(device) for key, value in encoded.items()}
 
@@ -70,35 +73,26 @@ def reduce_tensor(value, world_size):
 
 def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch, is_main_process=True, world_size=1, scaler=None, use_amp=False):
     model.train()
-    loss_function_prompt = fusion_prompt_loss()
-    loss_function_prompt = loss_function_prompt.to(device)
+    loss_function_prompt = fusion_prompt_loss().to(device)
 
     accu_total_loss = torch.zeros(1).to(device)
     accu_ssim_loss = torch.zeros(1).to(device)
-    accu_ssim_loss_mask = torch.zeros(1).to(device)
-    accu_loss_consist = torch.zeros(1).to(device)
-    accu_loss_consist_mask = torch.zeros(1).to(device)
-    accu_text_loss = torch.zeros(1).to(device)
-    accu_text_loss_mask = torch.zeros(1).to(device)
+    accu_consist_loss = torch.zeros(1).to(device)
+    accu_grad_loss = torch.zeros(1).to(device)
 
     optimizer.zero_grad()
-
     data_loader = tqdm(data_loader, file=sys.stdout) if is_main_process else data_loader
-    for  image_ir, vis_text, ir_text, image_vis_mask,image_ir_mask,vis_y_image, vis_cb_image, vis_cr_image in data_loader:
 
-        image_vis_text = tokenize_text_batch(tokenizer, vis_text, device)
-        image_ir_text = tokenize_text_batch(tokenizer, ir_text, device)
+    for image_t2, pathology_text, ultrasound_text, t1_y_image, t1_cb_image, t1_cr_image in data_loader:
+        pathology_tokens = tokenize_text_batch(tokenizer, pathology_text, device)
+        ultrasound_tokens = tokenize_text_batch(tokenizer, ultrasound_text, device)
 
-        vis_y_image = vis_y_image.to(device)
-        image_ir = image_ir.to(device)
-        image_vis_mask = image_vis_mask.to(device)
-        image_ir_mask = image_ir_mask.to(device)
+        t1_y_image = t1_y_image.to(device)
+        image_t2 = image_t2.to(device)
 
         with autocast(enabled=use_amp):
-            I_fused = model(vis_y_image, image_ir, image_vis_text, image_ir_text)
-
-            loss, loss_ssim, loss_ssim_mask, loss_consist, loss_consist_mask, loss_text, loss_text_mask = \
-                loss_function_prompt(vis_y_image, image_ir, I_fused, image_vis_mask, image_ir_mask)
+            image_fused = model(t1_y_image, image_t2, pathology_tokens, ultrasound_tokens)
+            loss, loss_ssim, loss_consist, loss_grad = loss_function_prompt(t1_y_image, image_t2, image_fused)
 
         if scaler is not None and use_amp:
             scaler.scale(loss).backward()
@@ -107,22 +101,23 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
 
         accu_total_loss += loss.detach()
         accu_ssim_loss += loss_ssim.detach()
-        accu_ssim_loss_mask += loss_ssim_mask.detach()
-        accu_loss_consist += loss_consist.detach()
-        accu_loss_consist_mask += loss_consist_mask.detach()
-        accu_text_loss += loss_text.detach()
-        accu_text_loss_mask += loss_text_mask.detach()
-
+        accu_consist_loss += loss_consist.detach()
+        accu_grad_loss += loss_grad.detach()
 
         lr = optimizer.param_groups[0]["lr"]
 
         if is_main_process:
-            data_loader.desc = "[train epoch {}] loss: {:.3f}  ssim: {:.3f}  ssim_mask: {:.3f}  " \
-                               "consist: {:.3f}   consist_mask: {:.3f}     text: {:.3f}  text_mask: {:.3f}   lr: {:.6f}".format(epoch, accu_total_loss.item(),
-                accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(),  accu_text_loss.item(), accu_text_loss_mask.item(), lr)
+            data_loader.desc = "[train epoch {}] loss: {:.3f}  ssim: {:.3f}  consist: {:.3f}  grad: {:.3f}  lr: {:.6f}".format(
+                epoch,
+                accu_total_loss.item(),
+                accu_ssim_loss.item(),
+                accu_consist_loss.item(),
+                accu_grad_loss.item(),
+                lr,
+            )
 
         if not torch.isfinite(loss):
-            print('WARNING: non-finite loss, ending training ', loss)
+            print("WARNING: non-finite loss, ending training ", loss)
             sys.exit(1)
 
         if scaler is not None and use_amp:
@@ -135,94 +130,65 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
 
     accu_total_loss = reduce_tensor(accu_total_loss, world_size)
     accu_ssim_loss = reduce_tensor(accu_ssim_loss, world_size)
-    accu_ssim_loss_mask = reduce_tensor(accu_ssim_loss_mask, world_size)
-    accu_loss_consist = reduce_tensor(accu_loss_consist, world_size)
-    accu_loss_consist_mask = reduce_tensor(accu_loss_consist_mask, world_size)
-    accu_text_loss = reduce_tensor(accu_text_loss, world_size)
-    accu_text_loss_mask = reduce_tensor(accu_text_loss_mask, world_size)
+    accu_consist_loss = reduce_tensor(accu_consist_loss, world_size)
+    accu_grad_loss = reduce_tensor(accu_grad_loss, world_size)
 
-    return accu_total_loss.item(), accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(), accu_text_loss.item(), accu_text_loss_mask.item(), lr
+    return accu_total_loss.item(), accu_ssim_loss.item(), accu_consist_loss.item(), accu_grad_loss.item(), lr
 
 
 @torch.no_grad()
 def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path, is_main_process=True):
-    loss_function_prompt = fusion_prompt_loss()
+    loss_function_prompt = fusion_prompt_loss().to(device)
     model.eval()
 
     accu_total_loss = torch.zeros(1).to(device)
     accu_ssim_loss = torch.zeros(1).to(device)
-    accu_ssim_loss_mask = torch.zeros(1).to(device)
-    accu_loss_consist = torch.zeros(1).to(device)
-    accu_loss_consist_mask = torch.zeros(1).to(device)
-    accu_text_loss = torch.zeros(1).to(device)
-    accu_text_loss_mask = torch.zeros(1).to(device)
+    accu_consist_loss = torch.zeros(1).to(device)
+    accu_grad_loss = torch.zeros(1).to(device)
 
-    save_epoch = 1
-
-    loss_function_prompt = loss_function_prompt.to(device)
-    
-    if epoch % save_epoch == 0:
-        evalfold_path = os.path.join(filefold_path, str(epoch))
-        if os.path.exists(evalfold_path) is False:
-            os.makedirs(evalfold_path)
+    evalfold_path = os.path.join(filefold_path, str(epoch))
+    if os.path.exists(evalfold_path) is False:
+        os.makedirs(evalfold_path)
 
     data_loader = tqdm(data_loader, file=sys.stdout) if is_main_process else data_loader
 
-    for image_ir, vis_text, ir_text, image_vis_mask, image_ir_mask, name,vis_y_image, vis_cb_image, vis_cr_image in data_loader:
+    for image_t2, pathology_text, ultrasound_text, name, t1_y_image, t1_cb_image, t1_cr_image in data_loader:
+        pathology_tokens = tokenize_text_batch(tokenizer, pathology_text, device)
+        ultrasound_tokens = tokenize_text_batch(tokenizer, ultrasound_text, device)
 
-        image_vis_text = tokenize_text_batch(tokenizer, vis_text, device)
-        image_ir_text = tokenize_text_batch(tokenizer, ir_text, device)
-        
-        
-        vis_y_image = vis_y_image.to(device)
-        image_ir = image_ir.to(device)
-        image_vis_mask = image_vis_mask.to(device)
-        image_ir_mask = image_ir_mask.to(device)
-        vis_cb_image = vis_cb_image.to(device)
-        vis_cr_image = vis_cr_image.to(device)
+        t1_y_image = t1_y_image.to(device)
+        image_t2 = image_t2.to(device)
+        t1_cb_image = t1_cb_image.to(device)
+        t1_cr_image = t1_cr_image.to(device)
 
         with autocast(enabled=(device.type == "cuda")):
-            I_fused = model(vis_y_image, image_ir, image_vis_text, image_ir_text)
-            fused_img = clamp(I_fused)
-        
-        fused_img = YCrCb2RGB(fused_img[0], vis_cb_image[0], vis_cr_image[0])
+            image_fused = model(t1_y_image, image_t2, pathology_tokens, ultrasound_tokens)
+            fused_img = clamp(image_fused)
+            loss, loss_ssim, loss_consist, loss_grad = loss_function_prompt(t1_y_image, image_t2, image_fused)
+
+        fused_img = YCrCb2RGB(fused_img[0], t1_cb_image[0], t1_cr_image[0])
         fused_img = transforms.ToPILImage()(fused_img)
-
-
         fused_img.save(os.path.join(evalfold_path, name[0]))
-        
-
-
-        with autocast(enabled=(device.type == "cuda")):
-            loss, loss_ssim, loss_ssim_mask, loss_consist, loss_consist_mask, loss_text, loss_text_mask = \
-                loss_function_prompt(vis_y_image, image_ir, I_fused, image_vis_mask, image_ir_mask)
-
-
 
         accu_total_loss += loss.detach()
         accu_ssim_loss += loss_ssim.detach()
-        accu_ssim_loss_mask += loss_ssim_mask.detach()
-
-        accu_loss_consist += loss_consist.detach()
-        accu_loss_consist_mask += loss_consist_mask.detach()
-
-        accu_text_loss += loss_text.detach()
-        accu_text_loss_mask += loss_text_mask.detach()
-
+        accu_consist_loss += loss_consist.detach()
+        accu_grad_loss += loss_grad.detach()
 
         if is_main_process:
-            data_loader.desc = "[eval epoch {}] loss:{:.3f}  ssim:{:.3f}  ssim_mask:{:.3f}  " \
-                               "consist:{:.3f} consist_mask:{:.3f}  text:{:.3f}  text_mask:{:.3f} lr:{:.6f}".format( epoch, accu_total_loss.item(),  accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(), accu_text_loss.item(), accu_text_loss_mask.item(), lr)
+            data_loader.desc = "[eval epoch {}] loss:{:.3f}  ssim:{:.3f}  consist:{:.3f}  grad:{:.3f}  lr:{:.6f}".format(
+                epoch,
+                accu_total_loss.item(),
+                accu_ssim_loss.item(),
+                accu_consist_loss.item(),
+                accu_grad_loss.item(),
+                lr,
+            )
 
-    return accu_total_loss.item(), accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(),accu_text_loss.item(), accu_text_loss_mask.item(), lr
+    return accu_total_loss.item(), accu_ssim_loss.item(), accu_consist_loss.item(), accu_grad_loss.item(), lr
 
 
-def create_lr_scheduler(optimizer,
-                        num_step: int,
-                        epochs: int,
-                        warmup=True,
-                        warmup_epochs=1,
-                        warmup_factor=1e-3):
+def create_lr_scheduler(optimizer, num_step: int, epochs: int, warmup=True, warmup_epochs=1, warmup_factor=1e-3):
     assert num_step > 0 and epochs > 0
     if warmup is False:
         warmup_epochs = 0
@@ -231,64 +197,38 @@ def create_lr_scheduler(optimizer,
         if warmup is True and x <= (warmup_epochs * num_step):
             alpha = float(x) / (warmup_epochs * num_step)
             return warmup_factor * (1 - alpha) + alpha
-        else:
-            return (1 - (x - warmup_epochs * num_step) / ((epochs - warmup_epochs) * num_step)) ** 0.9
+        return (1 - (x - warmup_epochs * num_step) / ((epochs - warmup_epochs) * num_step)) ** 0.9
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=f)
 
 
-
-
-
-
 def RGB2YCrCb(rgb_image):
-    """
-    灏哛GB鏍煎紡杞崲涓篩CrCb鏍煎紡
+    r_channel = rgb_image[0:1]
+    g_channel = rgb_image[1:2]
+    b_channel = rgb_image[2:3]
+    y_channel = 0.299 * r_channel + 0.587 * g_channel + 0.114 * b_channel
+    cr_channel = (r_channel - y_channel) * 0.713 + 0.5
+    cb_channel = (b_channel - y_channel) * 0.564 + 0.5
 
-    :param rgb_image: RGB鏍煎紡鐨勫浘鍍忔暟鎹?    :return: Y, Cr, Cb
-    """
-
-    R = rgb_image[0:1]
-    G = rgb_image[1:2]
-    B = rgb_image[2:3]
-    Y = 0.299 * R + 0.587 * G + 0.114 * B
-    Cr = (R - Y) * 0.713 + 0.5
-    Cb = (B - Y) * 0.564 + 0.5
-
-    Y = clamp(Y)
-    Cr = clamp(Cr)
-    Cb = clamp(Cb)
-    return Y, Cb, Cr
+    y_channel = clamp(y_channel)
+    cr_channel = clamp(cr_channel)
+    cb_channel = clamp(cb_channel)
+    return y_channel, cb_channel, cr_channel
 
 
-def YCrCb2RGB(Y, Cb, Cr):
-    """
-    灏哬crCb鏍煎紡杞崲涓篟GB鏍煎紡
-
-    :param Y:
-    :param Cb:
-    :param Cr:
-    :return:
-    """
-    ycrcb = torch.cat([Y, Cr, Cb], dim=0)
-    C, W, H = ycrcb.shape
+def YCrCb2RGB(y_channel, cb_channel, cr_channel):
+    ycrcb = torch.cat([y_channel, cr_channel, cb_channel], dim=0)
+    channels, width, height = ycrcb.shape
     im_flat = ycrcb.reshape(3, -1).transpose(0, 1)
     mat = torch.tensor(
         [[1.0, 1.0, 1.0], [1.403, -0.714, 0.0], [0.0, -0.344, 1.773]]
-    ).to(Y.device)
-    bias = torch.tensor([0.0 / 255, -0.5, -0.5]).to(Y.device)
+    ).to(y_channel.device)
+    bias = torch.tensor([0.0 / 255, -0.5, -0.5]).to(y_channel.device)
     temp = (im_flat + bias).mm(mat)
-    out = temp.transpose(0, 1).reshape(C, W, H)
+    out = temp.transpose(0, 1).reshape(channels, width, height)
     out = clamp(out)
     return out
 
 
-def clamp(value, min=0., max=1.0):
-    """
-    灏嗗儚绱犲€煎己鍒剁害鏉熷湪[0,1], 浠ュ厤鍑虹幇寮傚父鏂戠偣
-    :param value:
-    :param min:
-    :param max:
-    :return:
-    """
+def clamp(value, min=0.0, max=1.0):
     return torch.clamp(value, min=min, max=max)
