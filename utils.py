@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import torch.distributed as dist
 from tqdm import tqdm
 from losses import fusion_prompt_loss
 from torchvision import transforms
@@ -55,7 +56,17 @@ def load_text_encoder(model_name_or_path, device, explicit_path=""):
         raise RuntimeError(hint) from exc
 
 
-def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch):
+def reduce_tensor(value, world_size):
+    if world_size < 2:
+        return value
+
+    reduced = value.detach().clone()
+    dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
+    reduced /= world_size
+    return reduced
+
+
+def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch, is_main_process=True, world_size=1):
     model.train()
     loss_function_prompt = fusion_prompt_loss()
     loss_function_prompt = loss_function_prompt.to(device)
@@ -70,7 +81,7 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
 
     optimizer.zero_grad()
 
-    data_loader = tqdm(data_loader, file=sys.stdout)
+    data_loader = tqdm(data_loader, file=sys.stdout) if is_main_process else data_loader
     for  image_ir, vis_text, ir_text, image_vis_mask,image_ir_mask,vis_y_image, vis_cb_image, vis_cr_image in data_loader:
 
         image_vis_text = tokenize_text_batch(tokenizer, vis_text, device)
@@ -99,9 +110,10 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
 
         lr = optimizer.param_groups[0]["lr"]
 
-        data_loader.desc = "[train epoch {}] loss: {:.3f}  ssim: {:.3f}  ssim_mask: {:.3f}  " \
-                           "consist: {:.3f}   consist_mask: {:.3f}     text: {:.3f}  text_mask: {:.3f}   lr: {:.6f}".format(epoch, accu_total_loss.item(),
-            accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(),  accu_text_loss.item(), accu_text_loss_mask.item(), lr)
+        if is_main_process:
+            data_loader.desc = "[train epoch {}] loss: {:.3f}  ssim: {:.3f}  ssim_mask: {:.3f}  " \
+                               "consist: {:.3f}   consist_mask: {:.3f}     text: {:.3f}  text_mask: {:.3f}   lr: {:.6f}".format(epoch, accu_total_loss.item(),
+                accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(),  accu_text_loss.item(), accu_text_loss_mask.item(), lr)
 
         if not torch.isfinite(loss):
             print('WARNING: non-finite loss, ending training ', loss)
@@ -111,11 +123,19 @@ def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, devi
         lr_scheduler.step()
         optimizer.zero_grad()
 
+    accu_total_loss = reduce_tensor(accu_total_loss, world_size)
+    accu_ssim_loss = reduce_tensor(accu_ssim_loss, world_size)
+    accu_ssim_loss_mask = reduce_tensor(accu_ssim_loss_mask, world_size)
+    accu_loss_consist = reduce_tensor(accu_loss_consist, world_size)
+    accu_loss_consist_mask = reduce_tensor(accu_loss_consist_mask, world_size)
+    accu_text_loss = reduce_tensor(accu_text_loss, world_size)
+    accu_text_loss_mask = reduce_tensor(accu_text_loss_mask, world_size)
+
     return accu_total_loss.item(), accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(), accu_text_loss.item(), accu_text_loss_mask.item(), lr
 
 
 @torch.no_grad()
-def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path):
+def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path, is_main_process=True):
     loss_function_prompt = fusion_prompt_loss()
     model.eval()
 
@@ -136,7 +156,7 @@ def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path):
         if os.path.exists(evalfold_path) is False:
             os.makedirs(evalfold_path)
 
-    data_loader = tqdm(data_loader, file=sys.stdout)
+    data_loader = tqdm(data_loader, file=sys.stdout) if is_main_process else data_loader
 
     for image_ir, vis_text, ir_text, image_vis_mask, image_ir_mask, name,vis_y_image, vis_cb_image, vis_cr_image in data_loader:
 
@@ -180,8 +200,9 @@ def evaluate(model, tokenizer, data_loader, device, epoch, lr, filefold_path):
         accu_text_loss_mask += loss_text_mask.detach()
 
 
-        data_loader.desc = "[eval epoch {}] loss:{:.3f}  ssim:{:.3f}  ssim_mask:{:.3f}  " \
-                           "consist:{:.3f} consist_mask:{:.3f}  text:{:.3f}  text_mask:{:.3f} lr:{:.6f}".format( epoch, accu_total_loss.item(),  accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(), accu_text_loss.item(), accu_text_loss_mask.item(), lr)
+        if is_main_process:
+            data_loader.desc = "[eval epoch {}] loss:{:.3f}  ssim:{:.3f}  ssim_mask:{:.3f}  " \
+                               "consist:{:.3f} consist_mask:{:.3f}  text:{:.3f}  text_mask:{:.3f} lr:{:.6f}".format( epoch, accu_total_loss.item(),  accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(), accu_text_loss.item(), accu_text_loss_mask.item(), lr)
 
     return accu_total_loss.item(), accu_ssim_loss.item(), accu_ssim_loss_mask.item(), accu_loss_consist.item(), accu_loss_consist_mask.item(),accu_text_loss.item(), accu_text_loss_mask.item(), lr
 
