@@ -1,6 +1,5 @@
 import os
 import sys
-import clip
 import torch
 from tqdm import tqdm
 from torchvision import transforms
@@ -8,24 +7,35 @@ from prompt_dataset import PromptDataSet
 from model import TextFuse as create_model
 from PIL import Image
 import time
+from transformers import AutoModel, AutoTokenizer
+
+
+def tokenize_text_batch(tokenizer, texts, device, max_length=512):
+    encoded = tokenizer(
+        list(texts),
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt"
+    )
+    return {key: value.to(device) for key, value in encoded.items()}
 
 @torch.no_grad()
-def evaluate(model, model_clip, data_loader, device):
+def evaluate(model, tokenizer, data_loader, device):
     model.eval()
-    model_clip.eval()
     data_loader = tqdm(data_loader, file=sys.stdout)
     model_to_run = model.module if hasattr(model, "module") else model
 
     for batch in data_loader:
         if len(batch) == 11:
             image_ir, vis_text, ir_text, name, vis_y_image, vis_cb_image, vis_cr_image, h, w, flag, vis_target_text = batch
-            vis_target_text = clip.tokenize(vis_target_text).to(device)
+            vis_target_text = tokenize_text_batch(tokenizer, vis_target_text, device)
         else:
             image_ir, vis_text, ir_text, name, vis_y_image, vis_cb_image, vis_cr_image, h, w, flag = batch
             vis_target_text = None
 
-        vis_text = clip.tokenize(vis_text).to(device)
-        ir_text = clip.tokenize(ir_text).to(device)
+        vis_text = tokenize_text_batch(tokenizer, vis_text, device)
+        ir_text = tokenize_text_batch(tokenizer, ir_text, device)
         
         vis_y_image = vis_y_image.to(device)
         image_ir = image_ir.to(device)
@@ -110,16 +120,17 @@ if __name__ == '__main__':
                                              pin_memory=True,
                                              num_workers=1,
                                              drop_last=True)
-    model_clip, _ = clip.load("ViT-B/32", device=device)
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    model_clip = AutoModel.from_pretrained("bert-base-uncased").to(device)
     model = create_model(model_clip).to(device)
     model_weight_path = "./checkpoint/checkpoint.pth"
-    model.load_state_dict(torch.load(model_weight_path, map_location=device, weights_only=False)['model'])
+    model.load_state_dict(torch.load(model_weight_path, map_location=device, weights_only=False)['model'], strict=False)
     model.eval()
 
     for param in model.model_clip.parameters():
         param.requires_grad = False
     
-    evaluate(model=model, model_clip=model_clip, data_loader=test_loader, device=device)
+    evaluate(model=model, tokenizer=tokenizer, data_loader=test_loader, device=device)
     end_time = time.time()
     elapsed_time = end_time - start_time  # 璁＄畻杩愯鏃堕棿锛堢锛?
     print(f"绋嬪簭杩愯鏃堕棿: {elapsed_time:.6f} 绉?)
