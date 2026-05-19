@@ -176,8 +176,7 @@ def main(args):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
-        train_loss, train_ssim_loss, train_ssim_loss_mask, train_consist_loss, \
-            train_consist_loss_mask, train_text_loss, train_text_loss_mask, lr = train_one_epoch(
+        train_loss, train_ssim_loss, train_consist_loss, train_grad_loss, lr = train_one_epoch(
                 model=model,
                 tokenizer=tokenizer,
                 optimizer=optimizer,
@@ -194,14 +193,11 @@ def main(args):
         if is_main_process():
             tb_writer.add_scalar("train_total_loss", train_loss, epoch)
             tb_writer.add_scalar("train_ssim_loss", train_ssim_loss, epoch)
-            tb_writer.add_scalar("train_ssim_loss_mask", train_ssim_loss_mask, epoch)
             tb_writer.add_scalar("train_consist_loss", train_consist_loss, epoch)
-            tb_writer.add_scalar("train_consist_loss_mask", train_consist_loss_mask, epoch)
-            tb_writer.add_scalar("train_text_loss", train_text_loss, epoch)
-            tb_writer.add_scalar("train_text_loss_mask", train_text_loss_mask, epoch)
+            tb_writer.add_scalar("train_grad_loss", train_grad_loss, epoch)
 
         if epoch % args.val_every_epcho == 0 and epoch != 0 and is_main_process():
-            val_loss, val_ssim_loss, val_ssim_loss_mask, val_consist_loss, val_consist_loss_mask, val_text_loss, val_text_loss_mask, lr = evaluate(
+            val_loss, val_ssim_loss, val_consist_loss, val_grad_loss, lr = evaluate(
                 model=model,
                 tokenizer=tokenizer,
                 data_loader=val_loader,
@@ -214,11 +210,8 @@ def main(args):
 
             tb_writer.add_scalar("val_total_loss", val_loss, epoch)
             tb_writer.add_scalar("val_ssim_loss", val_ssim_loss, epoch)
-            tb_writer.add_scalar("val_ssim_loss_mask", val_ssim_loss_mask, epoch)
             tb_writer.add_scalar("val_consist_loss", val_consist_loss, epoch)
-            tb_writer.add_scalar("val_consist_loss_mask", val_consist_loss_mask, epoch)
-            tb_writer.add_scalar("val_text_loss", val_text_loss, epoch)
-            tb_writer.add_scalar("val_text_loss_mask", val_text_loss_mask, epoch)
+            tb_writer.add_scalar("val_grad_loss", val_grad_loss, epoch)
 
             base_model = unwrap_model(model)
             save_file = {
