@@ -241,6 +241,8 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--local_rank', type=int, default=0, help='local rank passed by torchrun')
+    parser.add_argument('--local-rank', dest='local_rank', type=int, default=0, help='local rank passed by torchrun')
     parser.add_argument('--epochs', type=int, default=120)
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--lr', type=float, default=0.001)
