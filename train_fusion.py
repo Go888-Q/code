@@ -3,10 +3,9 @@ import argparse
 import torch
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from transformers import AutoModel, AutoTokenizer
 from prompt_dataset import PromptDataSet
 from model import TextFuse as create_model
-from utils import train_one_epoch, evaluate, create_lr_scheduler
+from utils import train_one_epoch, evaluate, create_lr_scheduler, load_text_encoder
 import datetime
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -35,8 +34,6 @@ def main(args):
     best_val_loss = 1e5
     start_epoch = 0
 
-
-
     train_dataset = PromptDataSet("train")
     val_dataset = PromptDataSet("eval")
 
@@ -58,8 +55,12 @@ def main(args):
                                              num_workers=nw,
                                              drop_last=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.text_model_name)
-    model_clip = AutoModel.from_pretrained(args.text_model_name).to(device)
+    tokenizer, model_clip, text_model_source = load_text_encoder(
+        args.text_model_name,
+        device,
+        explicit_path=args.text_model_path,
+    )
+    print("Using text encoder source: {}".format(text_model_source))
     model = create_model(model_clip).to(device)
 
     for param in model.model_clip.parameters():
@@ -73,7 +74,6 @@ def main(args):
         weights_dict = torch.load(args.weights, map_location=device)["model"]
         print(model.load_state_dict(weights_dict, strict=False))
 
-
     pg = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(pg, lr=args.lr, weight_decay=5E-2)
     lr_scheduler = create_lr_scheduler(optimizer, len(train_loader), args.epochs, warmup=True)
@@ -85,7 +85,6 @@ def main(args):
         start_epoch = checkpoint['epoch'] + 1
 
     for epoch in range(start_epoch, args.epochs):
-        # train
         train_loss, train_ssim_loss, train_ssim_loss_mask, train_consist_loss, \
             train_consist_loss_mask, train_text_loss, train_text_loss_mask, lr  = train_one_epoch(model=model,
                                               tokenizer=tokenizer,
@@ -102,7 +101,6 @@ def main(args):
         tb_writer.add_scalar("train_consist_loss_mask", train_consist_loss_mask, epoch)
         tb_writer.add_scalar("train_text_loss", train_text_loss, epoch)
         tb_writer.add_scalar("train_text_loss_mask", train_text_loss_mask, epoch)
-
 
         if epoch % args.val_every_epcho == 0 and epoch != 0:
             val_loss, val_ssim_loss, val_ssim_loss_mask, val_consist_loss, val_consist_loss_mask, val_text_loss, val_text_loss_mask, lr \
@@ -153,7 +151,6 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=120)
-    # set the appropriate batch-size value for your device
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--weights', type=str, default='',  help='initial weights path')
@@ -163,6 +160,7 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='cuda', help='device (i.e. cuda or cpu)')
     parser.add_argument('--gpu_id', default='0', help='device id (i.e. 0, 1, 2 or 3)')
     parser.add_argument('--text-model-name', default='bert-base-uncased', help='huggingface text encoder name')
+    parser.add_argument('--text-model-path', default='', help='local path to a downloaded Hugging Face text encoder')
     opt = parser.parse_args()
 
     main(opt)
