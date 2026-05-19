@@ -14,8 +14,15 @@ def evaluate(model, model_clip, data_loader, device):
     model.eval()
     model_clip.eval()
     data_loader = tqdm(data_loader, file=sys.stdout)
+    model_to_run = model.module if hasattr(model, "module") else model
 
-    for  image_ir, vis_text, ir_text,  name,vis_y_image, vis_cb_image, vis_cr_image ,h ,w,flag in data_loader:
+    for batch in data_loader:
+        if len(batch) == 11:
+            image_ir, vis_text, ir_text, name, vis_y_image, vis_cb_image, vis_cr_image, h, w, flag, vis_target_text = batch
+            vis_target_text = clip.tokenize(vis_target_text).to(device)
+        else:
+            image_ir, vis_text, ir_text, name, vis_y_image, vis_cb_image, vis_cr_image, h, w, flag = batch
+            vis_target_text = None
 
         vis_text = clip.tokenize(vis_text).to(device)
         ir_text = clip.tokenize(ir_text).to(device)
@@ -25,7 +32,7 @@ def evaluate(model, model_clip, data_loader, device):
 
         vis_cb_image = vis_cb_image.to(device)
         vis_cr_image = vis_cr_image.to(device)
-        I_fused = model(vis_y_image, image_ir,vis_text, ir_text)
+        I_fused = model_to_run(vis_y_image, image_ir, vis_text, ir_text, vis_target_text)
 
         # from thop import profile
         # flops, params = profile(model, inputs=(vis_y_image, image_ir,vis_text, ir_text), verbose=True)
@@ -37,12 +44,16 @@ def evaluate(model, model_clip, data_loader, device):
         fused_img = transforms.ToPILImage()(fused_img_tensor)
         
         
-        if flag ==1:
-            fused_img = transforms.ToPILImage()(fused_img_tensor).resize((w, h), resample=Image.BICUBIC)
+        resize_flag = flag.item() if isinstance(flag, torch.Tensor) else flag
+        width = w.item() if isinstance(w, torch.Tensor) else w
+        height = h.item() if isinstance(h, torch.Tensor) else h
+
+        if resize_flag == 1:
+            fused_img = transforms.ToPILImage()(fused_img_tensor).resize((width, height), resample=Image.BICUBIC)
 
 
         
-        save_path = "./resluts/MSRS"
+        save_path = "./results/MSRS"
         if not os.path.exists(save_path):#妫€鏌ョ洰褰曟槸鍚﹀瓨鍦?
                 os.makedirs(save_path)
 
