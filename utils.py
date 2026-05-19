@@ -4,6 +4,7 @@ import torch
 from tqdm import tqdm
 from losses import fusion_prompt_loss
 from torchvision import transforms
+from transformers import AutoModel, AutoTokenizer
 
 def tokenize_text_batch(tokenizer, texts, device, max_length=512):
     encoded = tokenizer(
@@ -14,6 +15,44 @@ def tokenize_text_batch(tokenizer, texts, device, max_length=512):
         return_tensors="pt"
     )
     return {key: value.to(device) for key, value in encoded.items()}
+
+
+def resolve_text_model_source(model_name_or_path, explicit_path=""):
+    candidates = []
+    if explicit_path:
+        candidates.append(explicit_path)
+
+    env_path = os.environ.get("TEXTFUSE_TEXT_MODEL_PATH", "").strip()
+    if env_path:
+        candidates.append(env_path)
+
+    if model_name_or_path:
+        candidates.append(model_name_or_path)
+        candidates.append(os.path.join(".", model_name_or_path))
+        candidates.append(os.path.join(".", "models", model_name_or_path))
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate, True
+
+    return model_name_or_path, False
+
+
+def load_text_encoder(model_name_or_path, device, explicit_path=""):
+    source, is_local = resolve_text_model_source(model_name_or_path, explicit_path=explicit_path)
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(source, local_files_only=is_local)
+        model = AutoModel.from_pretrained(source, local_files_only=is_local).to(device)
+        return tokenizer, model, source
+    except OSError as exc:
+        hint = (
+            "Unable to load the text encoder. "
+            f"Tried source: '{source}'. "
+            "For offline servers, download a Hugging Face model directory in advance and pass it with "
+            "--text-model-path or set TEXTFUSE_TEXT_MODEL_PATH."
+        )
+        raise RuntimeError(hint) from exc
 
 
 def train_one_epoch(model, tokenizer, optimizer, lr_scheduler, data_loader, device, epoch):
