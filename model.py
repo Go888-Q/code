@@ -43,22 +43,17 @@ class TextFuse(nn.Module):
 
         self.output = nn.Conv2d(int(dim), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
-    def forward(self, vi, ir, vis_text, ir_text, vis_target_text=None):
-        vis_text_features = self.get_text_feature(vis_text).to(device=vi.device, dtype=vi.dtype)
-        ir_text_features = self.get_text_feature(ir_text).to(device=vi.device, dtype=vi.dtype)
-        if vis_target_text is None:
-            vis_target_text_features = 0.5 * (vis_text_features + ir_text_features)
-        else:
-            vis_target_text_features = self.get_text_feature(vis_target_text).to(device=vi.device, dtype=vi.dtype)
+    def forward(self, vi, ir, pathology_text, ultrasound_text):
+        pathology_text_features = self.get_text_feature(pathology_text).to(device=vi.device, dtype=vi.dtype)
+        ultrasound_text_features = self.get_text_feature(ultrasound_text).to(device=vi.device, dtype=vi.dtype)
+        fused_text_features = 0.5 * (pathology_text_features + ultrasound_text_features)
 
         vi = self.encoder_vi(vi)
         ir = self.encoder_ir(ir)
 
-
-        vi_add_text = self.prompt_guidance(vi, vis_text_features)
-        ir_add_text = self.prompt_guidance(ir, ir_text_features)
+        vi_add_text = self.prompt_guidance(vi, pathology_text_features)
+        ir_add_text = self.prompt_guidance(ir, ultrasound_text_features)
         vi_ir_add_text_fuse = self.feature_fusion(vi_add_text, ir_add_text)
-
 
         vi_down = self.down(vi)
         ir_down = self.down(ir)
@@ -69,7 +64,7 @@ class TextFuse(nn.Module):
 
         encoder_out = self.feature_fusion(vi_ir_add_text_fuse, out_down_fuse_up)
 
-        vi_ir_text = self.prompt_guidance(encoder_out, vis_target_text_features)
+        vi_ir_text = self.prompt_guidance(encoder_out, fused_text_features)
         decoder_con = self.decoder(vi_ir_text)
 
         out = self.output(decoder_con)
@@ -439,6 +434,3 @@ class Upsample(nn.Module):
 #     print("dehaze out:", dehaze_rgb.shape)
 #     # discriminator expects condition+image
 #     print("fuse:", fuse_y.shape)
-
-
-
