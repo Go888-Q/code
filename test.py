@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import argparse
+import glob
 
 import torch
 from PIL import Image
@@ -75,6 +76,30 @@ def clamp(value, min=0.0, max=1.0):
     return torch.clamp(value, min=min, max=max)
 
 
+def resolve_checkpoint_path(requested_path):
+    if requested_path and os.path.exists(requested_path):
+        return requested_path
+
+    candidate_patterns = [
+        "./experiments/*/weights/checkpoint_lastest.pth",
+        "./experiments/*/weights/checkpoint.pth",
+        "./checkpoint/checkpoint.pth",
+    ]
+
+    candidates = []
+    for pattern in candidate_patterns:
+        candidates.extend(glob.glob(pattern))
+
+    if candidates:
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
+
+    raise FileNotFoundError(
+        "No checkpoint file was found. "
+        "Pass --checkpoint-path explicitly or place weights under ./experiments/.../weights/."
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--text-model-name", default="bert-base-uncased", help="huggingface text encoder name")
@@ -101,7 +126,8 @@ if __name__ == "__main__":
     )
     print("Using text encoder source: {}".format(text_model_source))
     model = create_model(model_clip).to(device)
-    model_weight_path = args.checkpoint_path
+    model_weight_path = resolve_checkpoint_path(args.checkpoint_path)
+    print("Using checkpoint: {}".format(model_weight_path))
     model.load_state_dict(torch.load(model_weight_path, map_location=device, weights_only=False)["model"], strict=False)
     model.eval()
 
