@@ -1,26 +1,16 @@
 import os
 import sys
 import time
+import argparse
 
 import torch
 from PIL import Image
 from tqdm import tqdm
 from torchvision import transforms
-from transformers import AutoModel, AutoTokenizer
 
 from model import TextFuse as create_model
 from prompt_dataset import PromptDataSet
-
-
-def tokenize_text_batch(tokenizer, texts, device, max_length=512):
-    encoded = tokenizer(
-        list(texts),
-        padding=True,
-        truncation=True,
-        max_length=max_length,
-        return_tensors="pt",
-    )
-    return {key: value.to(device) for key, value in encoded.items()}
+from utils import tokenize_text_batch, load_text_encoder
 
 
 @torch.no_grad()
@@ -69,14 +59,14 @@ def evaluate(model, tokenizer, data_loader, device):
 
 def YCrCb2RGB(Y, Cb, Cr):
     ycrcb = torch.cat([Y, Cr, Cb], dim=0)
-    c, w, h = ycrcb.shape
+    C, W, H = ycrcb.shape
     im_flat = ycrcb.reshape(3, -1).transpose(0, 1)
     mat = torch.tensor(
         [[1.0, 1.0, 1.0], [1.403, -0.714, 0.0], [0.0, -0.344, 1.773]]
     ).to(Y.device)
     bias = torch.tensor([0.0 / 255, -0.5, -0.5]).to(Y.device)
     temp = (im_flat + bias).mm(mat)
-    out = temp.transpose(0, 1).reshape(c, w, h)
+    out = temp.transpose(0, 1).reshape(C, W, H)
     out = clamp(out)
     return out
 
@@ -86,6 +76,12 @@ def clamp(value, min=0.0, max=1.0):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--text-model-name", default="bert-base-uncased", help="huggingface text encoder name")
+    parser.add_argument("--text-model-path", default="", help="local path to a downloaded Hugging Face text encoder")
+    parser.add_argument("--checkpoint-path", default="./checkpoint/checkpoint.pth", help="checkpoint path")
+    args = parser.parse_args()
+
     start_time = time.time()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     test_dataset = PromptDataSet("test")
@@ -98,14 +94,15 @@ if __name__ == "__main__":
         num_workers=1,
         drop_last=True,
     )
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    model_clip = AutoModel.from_pretrained("bert-base-uncased").to(device)
-    model = create_model(model_clip).to(device)
-    model_weight_path = "./checkpoint/checkpoint.pth"
-    model.load_state_dict(
-        torch.load(model_weight_path, map_location=device, weights_only=False)["model"],
-        strict=False,
+    tokenizer, model_clip, text_model_source = load_text_encoder(
+        args.text_model_name,
+        device,
+        explicit_path=args.text_model_path,
     )
+    print("Using text encoder source: {}".format(text_model_source))
+    model = create_model(model_clip).to(device)
+    model_weight_path = args.checkpoint_path
+    model.load_state_dict(torch.load(model_weight_path, map_location=device, weights_only=False)["model"], strict=False)
     model.eval()
 
     for param in model.model_clip.parameters():
