@@ -44,14 +44,12 @@ class TextFuse(nn.Module):
         self.output = nn.Conv2d(int(dim), out_channels, kernel_size=3, stride=1, padding=1, bias=bias)
 
     def forward(self, vi, ir, vis_text, ir_text, vis_target_text=None):
-        b = vi.shape[0]
- 
-        vis_text_features = self.get_text_feature(vis_text.expand(b, -1)).to(vi.dtype)
-        ir_text_features = self.get_text_feature(ir_text.expand(b, -1)).to(vi.dtype)
+        vis_text_features = self.get_text_feature(vis_text).to(vi.dtype)
+        ir_text_features = self.get_text_feature(ir_text).to(vi.dtype)
         if vis_target_text is None:
             vis_target_text_features = 0.5 * (vis_text_features + ir_text_features)
         else:
-            vis_target_text_features = self.get_text_feature(vis_target_text.expand(b, -1)).to(vi.dtype)
+            vis_target_text_features = self.get_text_feature(vis_target_text).to(vi.dtype)
 
         vi = self.encoder_vi(vi)
         ir = self.encoder_ir(ir)
@@ -79,7 +77,31 @@ class TextFuse(nn.Module):
 
     @torch.no_grad()
     def get_text_feature(self, text):
-        text_feature = self.model_clip.encode_text(text)
+        if isinstance(text, dict):
+            outputs = self.model_clip(**text)
+            if hasattr(outputs, "last_hidden_state"):
+                hidden = outputs.last_hidden_state
+                attention_mask = text.get("attention_mask")
+                if attention_mask is not None:
+                    mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
+                    summed = (hidden * mask).sum(dim=1)
+                    denom = mask.sum(dim=1).clamp(min=1.0)
+                    text_feature = summed / denom
+                else:
+                    text_feature = hidden[:, 0, :]
+            elif hasattr(outputs, "pooler_output") and outputs.pooler_output is not None:
+                text_feature = outputs.pooler_output
+            else:
+                text_feature = outputs[0][:, 0, :]
+        else:
+            text_feature = self.model_clip.encode_text(text)
+
+        feature_dim = text_feature.shape[-1]
+        if feature_dim > 512:
+            text_feature = text_feature[:, :512]
+        elif feature_dim < 512:
+            pad = text_feature.new_zeros(text_feature.shape[0], 512 - feature_dim)
+            text_feature = torch.cat([text_feature, pad], dim=-1)
         return text_feature
 
 class Cross_attention(nn.Module):
