@@ -3,7 +3,7 @@ import argparse
 import torch
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-import clip
+from transformers import AutoModel, AutoTokenizer
 from prompt_dataset import PromptDataSet
 from model import TextFuse as create_model
 from utils import train_one_epoch, evaluate, create_lr_scheduler
@@ -58,7 +58,8 @@ def main(args):
                                              num_workers=nw,
                                              drop_last=True)
 
-    model_clip, _ = clip.load("ViT-B/32", device=device)
+    tokenizer = AutoTokenizer.from_pretrained(args.text_model_name)
+    model_clip = AutoModel.from_pretrained(args.text_model_name).to(device)
     model = create_model(model_clip).to(device)
 
     for param in model.model_clip.parameters():
@@ -79,7 +80,7 @@ def main(args):
 
     if args.resume:
         checkpoint = torch.load(args.resume, map_location=device)
-        model.load_state_dict(checkpoint['model'])
+        model.load_state_dict(checkpoint['model'], strict=False)
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
         start_epoch = checkpoint['epoch'] + 1
 
@@ -87,7 +88,7 @@ def main(args):
         # train
         train_loss, train_ssim_loss, train_ssim_loss_mask, train_consist_loss, \
             train_consist_loss_mask, train_text_loss, train_text_loss_mask, lr  = train_one_epoch(model=model,
-                                              model_clip=model_clip,
+                                              tokenizer=tokenizer,
                                                 optimizer=optimizer,
                                                 data_loader=train_loader,
                                                 lr_scheduler=lr_scheduler,
@@ -105,7 +106,7 @@ def main(args):
 
         if epoch % args.val_every_epcho == 0 and epoch != 0:
             val_loss, val_ssim_loss, val_ssim_loss_mask, val_consist_loss, val_consist_loss_mask, val_text_loss, val_text_loss_mask, lr \
-                = evaluate(model=model, model_clip=model_clip,   data_loader=val_loader, device=device,   epoch=epoch, lr=lr, filefold_path=file_img_path)
+                = evaluate(model=model, tokenizer=tokenizer, data_loader=val_loader, device=device, epoch=epoch, lr=lr, filefold_path=file_img_path)
 
             tb_writer.add_scalar("val_total_loss", val_loss, epoch)
             tb_writer.add_scalar("val_ssim_loss", val_ssim_loss, epoch)
@@ -161,6 +162,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_dp', default = False, help='use dp-multigpus')
     parser.add_argument('--device', default='cuda', help='device (i.e. cuda or cpu)')
     parser.add_argument('--gpu_id', default='0', help='device id (i.e. 0, 1, 2 or 3)')
+    parser.add_argument('--text-model-name', default='bert-base-uncased', help='huggingface text encoder name')
     opt = parser.parse_args()
 
     main(opt)
